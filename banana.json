@@ -1,0 +1,15 @@
+{
+    "version": 1,
+    "entries": [
+        "./src/app.banana",
+        "./src/popup/popup.banana"
+    ],
+    "app": {
+        "name": "Catch",
+        "entry": "./src/main.odin",
+        "flags": ["-resource:catch.rc"]
+    },
+    "collections": {
+        "catch": "./src"
+    }
+}

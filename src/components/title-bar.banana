@@ -1,0 +1,29 @@
+package app.components
+
+import "../style/index.css"
+import platform from "banana:platform"
+odin:import icon from "catch:kit/icon"
+
+export func component TitleBar(title: string): (this as node, root, minimize_button, close_button) {
+    let root: box = $state(nil)
+    let minimize_button: button = $state(nil)
+    let close_button: button = $state(nil)
+
+    let w = $window()
+
+    render {
+        @(
+            <box bind:this={root} class="titlebar">
+                <box class="titlebar-label">{title}</box>
+                <box class="titlebar-buttons">
+                    <button bind:this={minimize_button} class="chrome-button" onclick={() => { platform.minimize(w) }}>
+                        <icon name="minus" size={16} />
+                    </button>
+                    <button bind:this={close_button} class="chrome-button close" onclick={() => { platform.close(w) }}>
+                        <icon name="x" size={16} />
+                    </button>
+                </box>
+            </box>
+        )
+    }
+}

@@ -1,0 +1,7 @@
+{
+    "scripts": {
+        "dev": "yarn native && banana run",
+        "build": "yarn native && banana build",
+        "native": "powershell -NoProfile -ExecutionPolicy Bypass -File native/build.ps1"
+    }
+}

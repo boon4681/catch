@@ -1,0 +1,260 @@
+package app.popup
+
+import "../style/index.css"
+import "./popup.css"
+odin:import mailbox from "catch:shell/mailbox"
+odin:import backend from "catch:backend"
+odin:import icon from "catch:kit/icon"
+odin:import fmt from "core:fmt"
+odin:import time from "core:time"
+odin:import strings from "core:strings"
+import platform from "banana:platform"
+
+// Room around the card for its shadow; the window is click-through there.
+let SHADOW: int = 40
+let EDGE: int = 16
+
+func summary(count: int, mime: string, title: string): string {
+    if (count == 1) return title
+    if (strings.has_prefix(mime, "image/")) return fmt.tprintf("%d photos", count)
+    if (strings.has_prefix(mime, "video/")) return fmt.tprintf("%d videos", count)
+    return fmt.tprintf("%d items", count)
+}
+
+func size_text(bytes: i64): string {
+    let b = f64(bytes)
+    if (b >= 1024.0 * 1024.0 * 1024.0) return fmt.tprintf("%.1f GB", b / (1024.0 * 1024.0 * 1024.0))
+    if (b >= 1024.0 * 1024.0) return fmt.tprintf("%.1f MB", b / (1024.0 * 1024.0))
+    if (b >= 1024.0) return fmt.tprintf("%.0f KB", b / 1024.0)
+    return fmt.tprintf("%d B", bytes)
+}
+
+// A compact take on the design's 420x600 card, which filled most of a laptop screen.
+let CARD_WIDTH: int = 360
+
+func card_height(kind: mailbox.Kind): int {
+    if (kind == mailbox.Kind.Link) return 290
+    if (kind == mailbox.Kind.Receiving) return 92
+    if (kind == mailbox.Kind.Request || kind == mailbox.Kind.Saved || kind == mailbox.Kind.Notice) return 76
+    return 460
+}
+
+let picked = $writable("")
+
+func component FolderChip(path: string) {
+    render {
+        @(
+            <button class="chip {strings.equal_fold(path, picked) ? 'picked' : ''}" onclick={() => { picked = path }}>
+                {backend.folder_name(path)}
+            </button>
+        )
+    }
+}
+
+export func component Popup() {
+    let p: mailbox.Preview = $state(mailbox.Preview{})
+    let photo: img = $state(nil)
+    let leaving = $state(false)
+    let placed = $state(0)
+    let w = $window()
+
+    // The main thread answers by publishing what comes next, or nothing.
+    let act = (kind: mailbox.Action_Kind, detail: string) => {
+        mailbox.post(kind, p.session, detail)
+    }
+
+    let place = () => {
+        let scale = w.scale > 0 ? w.scale : 1
+        let width = int(f32(CARD_WIDTH + SHADOW * 2) * scale)
+        let height = int(f32(card_height(p.kind) + SHADOW * 2) * scale)
+        if (height == placed) return
+        placed = height
+        let left, top, right, bottom = backend.work_area()
+        let inset = int(f32(EDGE - SHADOW) * scale)
+        platform.set_size(w, width, height)
+        platform.set_position(w, right - width - inset, bottom - height - inset)
+    }
+
+    let refresh = () => {
+        let next = mailbox.current()
+        if (next.serial != p.serial) {
+            if (next.kind == mailbox.Kind.None) {
+                // Keep drawing the last card so it can sink away before the window goes.
+                if (!leaving && p.kind != mailbox.Kind.None) {
+                    leaving = true
+                    w.setTimeout(() => { if (leaving) platform.close(w) }, 280 * time.Millisecond)
+                }
+            } else {
+                if (next.kind != p.kind || next.session != p.session) picked = next.picked
+                p = next
+                leaving = false
+                place()
+            }
+        }
+        let chosen = mailbox.take_browsed()
+        if (chosen != "") {
+            picked = chosen
+            act(mailbox.Action_Kind.Remember, chosen)
+        }
+    }
+
+    $effect(() => {
+        if (photo != nil) {
+            if (p.image_memory) photo.set_bytes(photo, mailbox.copy_image(p.session, context.temp_allocator))
+            else photo.set_src(photo, p.image)
+        }
+    }, [p, photo])
+
+    // $window() is nil until mounted; timers start once it is.
+    w.setTimeout(() => { refresh() }, 0)
+    w.setInterval(() => { refresh() }, 50 * time.Millisecond)
+
+    render {
+        @(
+            <box class="popup-root">
+                {
+                    if (p.kind == mailbox.Kind.Request) {
+                        @(
+                            <box class="toast {leaving ? 'leaving' : ''}">
+                                <box class="avatar">{p.initial}</box>
+                                <box class="toast-text">
+                                    <box class="title-3 clip">{p.title}</box>
+                                    <box class="muted clip">{p.meta}</box>
+                                </box>
+                                <button class="round-button" onclick={() => { act(mailbox.Action_Kind.Decline, "") }}>
+                                    <icon name="x" size={20} />
+                                </button>
+                                <button class="primary" onclick={() => { act(mailbox.Action_Kind.Accept, "") }}>Accept</button>
+                            </box>
+                        )
+                    } else if (p.kind == mailbox.Kind.Receiving) {
+                        @(
+                            <box class="toast stack {leaving ? 'leaving' : ''}">
+                                <box class="toast-head">
+                                    <box class="thumb">
+                                        <icon name={p.photo ? "image" : "folder"} size={20} />
+                                    </box>
+                                    <box class="toast-text">
+                                        <box class="title-3 clip">{p.title}</box>
+                                        <box class="muted">{p.meta}</box>
+                                    </box>
+                                    <button class="round-button" onclick={() => { act(mailbox.Action_Kind.Cancel, "") }}>
+                                        <icon name="x" size={20} />
+                                    </button>
+                                </box>
+                                <box class="progress">
+                                    <box class="progress-fill" style="width: {p.progress}%"></box>
+                                </box>
+                            </box>
+                        )
+                    } else if (p.kind == mailbox.Kind.Saved || p.kind == mailbox.Kind.Notice) {
+                        @(
+                            <box class="toast {leaving ? 'leaving' : ''}">
+                                <box class="avatar">
+                                    <icon name={p.kind == mailbox.Kind.Saved ? "check-2" : "info"} size={20} />
+                                </box>
+                                <box class="toast-text">
+                                    <box class="title-3 clip">{p.title}</box>
+                                    <box class="muted clip">{p.meta}</box>
+                                </box>
+                                {
+                                    if (p.kind == mailbox.Kind.Saved) {
+                                        @(<button class="text-button" onclick={() => { act(mailbox.Action_Kind.Reveal, "") }}>Show</button>)
+                                    } else {
+                                        @(
+                                            <button class="round-button" onclick={() => { act(mailbox.Action_Kind.Dismiss, "") }}>
+                                                <icon name="x" size={20} />
+                                            </button>
+                                        )
+                                    }
+                                }
+                            </box>
+                        )
+                    } else if (p.kind == mailbox.Kind.Link) {
+                        @(
+                            <box class="preview link {leaving ? 'leaving' : ''}">
+                                <box class="preview-hero short">
+                                    <icon name="globe" size={32} />
+                                    <button class="float-button corner-tl" onclick={() => { act(mailbox.Action_Kind.Close, "") }}>
+                                        <icon name="x" size={20} />
+                                    </button>
+                                    <button class="float-button corner-tr" onclick={() => { act(mailbox.Action_Kind.Open, "") }}>
+                                        <icon name="more" size={20} />
+                                    </button>
+                                    <button class="float-button corner-br" onclick={() => { act(mailbox.Action_Kind.Copy, "") }}>
+                                        <icon name="copy" size={20} />
+                                    </button>
+                                </box>
+                                <box class="preview-body">
+                                    <box class="preview-heading">
+                                        <box class="title-2 clip">{p.title}</box>
+                                        <box class="preview-meta clip">{p.is_url ? fmt.tprintf("%s · %s", p.sender, backend.url_host(p.title)) : p.sender}</box>
+                                    </box>
+                                    <button class="primary wide" onclick={() => { act(p.is_url ? mailbox.Action_Kind.Open : mailbox.Action_Kind.Copy, ""); act(mailbox.Action_Kind.Close, "") }}>{p.is_url ? "Open" : "Copy"}</button>
+                                </box>
+                            </box>
+                        )
+                    } else if (p.kind == mailbox.Kind.File || p.kind == mailbox.Kind.Batch) {
+                        @(
+                            <box class="preview {leaving ? 'leaving' : ''}">
+                                <box class="preview-hero {p.kind == mailbox.Kind.Batch ? 'tiles' : ''}">
+                                    {
+                                        if (p.kind == mailbox.Kind.Batch) {
+                                            @(
+                                                <box class="tile-grid">
+                                                    {
+                                                        for (let i = 0; i < p.count && i < 8; i++) {
+                                                            @(<box class="tile"></box>)
+                                                        }
+                                                    }
+                                                </box>
+                                            )
+                                        } else if (p.image != "" || p.image_memory) {
+                                            @(
+                                                <box class="photo-clip">
+                                                    <img bind:this={photo} class="hero-image" fit="Cover" />
+                                                </box>
+                                            )
+                                        } else {
+                                            @(<icon name="folder" size={32} />)
+                                        }
+                                    }
+                                    <button class="float-button corner-tl" onclick={() => { act(mailbox.Action_Kind.Close, "") }}>
+                                        <icon name="x" size={20} />
+                                    </button>
+                                    { if (!p.held_in_memory) { @(
+                                    <button class="float-button corner-tr" onclick={() => { act(mailbox.Action_Kind.Open, "reveal") }}>
+                                        <icon name="more" size={20} />
+                                    </button>
+                                    <button class="float-button corner-br" onclick={() => { act(mailbox.Action_Kind.Open, "") }}>
+                                        <icon name="arrow-ur" size={20} />
+                                    </button>
+                                    ) } }
+                                </box>
+                                <box class="preview-body">
+                                    <box class="preview-heading">
+                                        <box class="title-2 clip">{summary(p.count, p.mime, p.title)}</box>
+                                        <box class="preview-meta clip">{fmt.tprintf("%s · %s", p.sender, size_text(p.size))}</box>
+                                    </box>
+                                    <box class="chips">
+                                        <button class="chip icon" onclick={() => { mailbox.browse(w) }}>
+                                            <icon name="plus" size={16} />
+                                        </button>
+                                        {
+                                            for (let path in p.folders) {
+                                                @(path, <FolderChip path={path} />)
+                                            }
+                                        }
+                                        <FolderChip path={p.downloads} />
+                                        <FolderChip path={p.pictures} />
+                                    </box>
+                                    <button class="primary wide" onclick={() => { act(mailbox.Action_Kind.Save, picked) }}>{p.kind == mailbox.Kind.Batch ? "Save all" : "Save"}</button>
+                                </box>
+                            </box>
+                        )
+                    }
+                }
+            </box>
+        )
+    }
+}

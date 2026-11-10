@@ -1,0 +1,405 @@
+package app.store
+
+odin:import backend from "catch:backend"
+odin:import fmt from "core:fmt"
+odin:import strings from "core:strings"
+odin:import shell from "catch:shell"
+odin:import mailbox from "catch:shell/mailbox"
+odin:import chime from "catch:kit/sound"
+
+let SAVED_TOAST_SECONDS: i64 = 6
+
+export let page = $writable("home")
+export let failure = $writable("")
+export let greeting_name = $writable("")
+
+export let alias = $writable("")
+export let mode: backend.Mode = $writable(backend.Mode.Off)
+export let visible_until: i64 = $writable(0)
+export let popup = $writable(true)
+export let sound = $writable(false)
+export let startup = $writable(false)
+export let folders: string[] = $writable([])
+export let now: i64 = $writable(0)
+
+export let history: backend.Item[] = $writable([])
+export let unseen = $writable(0)
+export let pending = $writable(false)
+export let pending_name = $writable("")
+
+// The desktop popup shows one thing at a time, picked by publish(): a pending
+// request or transfer first, then files waiting to be saved, then a short notice.
+// The popup runs on its own thread and only sees what is published.
+let toast: mailbox.Kind = $writable(mailbox.Kind.None)
+let toast_session: u64 = $writable(0)
+let toast_title = $writable("")
+let toast_meta = $writable("")
+let toast_photo = $writable(false)
+let toast_initial = $writable("")
+let toast_reveal = $writable("")
+let toast_until: i64 = $writable(0)
+let progress: f32 = $writable(0)
+
+let landed_session: u64 = $writable(0)
+let landed_name = $writable("")
+let landed_kind: mailbox.Kind = $writable(mailbox.Kind.None)
+let landed_image = $writable("")
+let landed_count = $writable(0)
+let landed_mime = $writable("")
+let landed_size: i64 = $writable(0)
+let landed_sender = $writable("")
+let landed_text = $writable("")
+
+// ---------------------------------------------------------------- copy
+
+export func summary(count: int, mime: string, title: string): string {
+    if (count == 1) return title
+    if (strings.has_prefix(mime, "image/")) return fmt.tprintf("%d photos", count)
+    if (strings.has_prefix(mime, "video/")) return fmt.tprintf("%d videos", count)
+    return fmt.tprintf("%d items", count)
+}
+
+export func size_text(bytes: i64): string {
+    let b = f64(bytes)
+    if (b >= 1024.0 * 1024.0 * 1024.0) return fmt.tprintf("%.1f GB", b / (1024.0 * 1024.0 * 1024.0))
+    if (b >= 1024.0 * 1024.0) return fmt.tprintf("%.1f MB", b / (1024.0 * 1024.0))
+    if (b >= 1024.0) return fmt.tprintf("%.0f KB", b / 1024.0)
+    return fmt.tprintf("%d B", bytes)
+}
+
+export func time_ago(at: i64): string {
+    let d = now - at
+    if (d < 60) return "just now"
+    if (d < 3600) return fmt.tprintf("%d min ago", d / 60)
+    if (d < 86400) return fmt.tprintf("%d h ago", d / 3600)
+    return fmt.tprintf("%d d ago", d / 86400)
+}
+
+export func visibility_cta(): string {
+    if (failure != "") return "Can't receive"
+    if (mode == backend.Mode.Ten_Minutes) return "Visible for 10 min"
+    if (mode == backend.Mode.One_Hour) return "Visible for 1 hour"
+    if (mode == backend.Mode.Always) return "Always visible"
+    return "Receiving off"
+}
+
+export func visibility_meta(): string {
+    if (failure != "") return failure
+    if (mode == backend.Mode.Always) return "Until you turn it off"
+    if (mode == backend.Mode.Off) return "Hidden from nearby devices"
+    let left = visible_until - now
+    if (left < 0) left = 0
+    if (mode == backend.Mode.One_Hour && left >= 600) return fmt.tprintf("%d min left", (left + 59) / 60)
+    return fmt.tprintf("%d:%02d left", left / 60, left % 60)
+}
+
+export func is_on(): bool {
+    return failure == "" && mode != backend.Mode.Off
+}
+
+export func initial(name: string): string {
+    if (len(name) == 0) return "?"
+    return strings.to_upper(strings.cut(name, 0, 1))
+}
+
+// ---------------------------------------------------------------- lifecycle
+
+func load_settings() {
+    let s = backend.settings()
+    alias = s.alias
+    mode = s.mode
+    visible_until = s.visible_until
+    popup = s.popup
+    sound = s.sound
+    folders = backend.folders()
+    startup = backend.startup()
+}
+
+export func start() {
+    if (!backend.start()) failure = backend.error()
+    greeting_name = backend.user_name()
+    now = backend.now()
+    load_settings()
+    history = backend.history()
+}
+
+export func tick() {
+    for (let k = 0; k < 16; k++) {
+        let action = mailbox.take()
+        if (action.kind != mailbox.Action_Kind.None) on_action(action)
+    }
+    for (let i = 0; i < 64; i++) {
+        let ev = backend.poll()
+        if (ev.kind == backend.Event_Kind.None) return
+        on_event(ev)
+    }
+}
+
+export func tick_clock() {
+    now = backend.now()
+    if ((mode == backend.Mode.Ten_Minutes || mode == backend.Mode.One_Hour) && now >= visible_until) {
+        choose_mode(backend.Mode.Off)
+    }
+    if (toast_until != 0 && now >= toast_until) dismiss_toast()
+}
+
+func show_notice(title: string, meta: string) {
+    toast = mailbox.Kind.Notice
+    toast_title = title
+    toast_meta = meta
+    toast_until = now + SAVED_TOAST_SECONDS
+    publish()
+}
+
+func busy(): bool {
+    return toast == mailbox.Kind.Request || toast == mailbox.Kind.Receiving
+}
+
+func publish() {
+    if (busy() || landed_kind == mailbox.Kind.None) {
+        shell.show(mailbox.Preview{
+            kind = toast,
+            session = toast_session,
+            title = toast_title,
+            meta = toast_meta,
+            initial = toast_initial,
+            progress = progress,
+            photo = toast_photo,
+        })
+        return
+    }
+    shell.show(mailbox.Preview{
+        kind = landed_kind,
+        session = landed_session,
+        sender = landed_sender,
+        title = landed_text,
+        mime = landed_mime,
+        image = landed_image,
+        image_bytes = backend.landed_image(landed_session),
+        held_in_memory = backend.landed_in_memory(landed_session),
+        count = landed_count,
+        size = landed_size,
+        is_url = backend.is_url(landed_text),
+        folders = backend.folders(),
+        picked = backend.settings().last_folder,
+        downloads = backend.downloads(),
+        pictures = backend.pictures(),
+    })
+}
+
+func on_event(ev: backend.Event) {
+    if (ev.kind == backend.Event_Kind.Request) {
+        // Let the user decide what to do with the pending files first.
+        if (pending) {
+            backend.decline(ev.session)
+            return
+        }
+        landed_kind = mailbox.Kind.None
+        toast = mailbox.Kind.Request
+        toast_session = ev.session
+        toast_title = ev.sender
+        toast_initial = initial(ev.sender)
+        toast_meta = summary(ev.count, ev.mime, ev.title)
+        toast_until = 0
+        progress = 0
+        publish()
+        // The request is the moment that needs the user, not the landing after Accept.
+        if (sound) chime.play()
+    } else if (ev.kind == backend.Event_Kind.Progress) {
+        if (ev.session != toast_session) return
+        if (toast != mailbox.Kind.Receiving) {
+            toast = mailbox.Kind.Receiving
+            toast_title = summary(ev.count, ev.mime, ev.title)
+            toast_photo = strings.has_prefix(ev.mime, "image/")
+        }
+        let pct: f32 = 0
+        if (ev.total > 0) pct = f32(f64(ev.received) / f64(ev.total) * 100.0)
+        progress = pct
+        toast_meta = fmt.tprintf("%.0f%%", pct)
+        publish()
+    } else if (ev.kind == backend.Event_Kind.Landed) {
+        on_landed(ev)
+    } else if (ev.kind == backend.Event_Kind.Canceled) {
+        if (busy()) show_notice("Transfer canceled", ev.sender)
+    } else if (ev.kind == backend.Event_Kind.Text) {
+        if (sound) chime.play()
+        history = backend.history()
+        unseen += 1
+        if (pending) return
+        toast = mailbox.Kind.None
+        landed_kind = mailbox.Kind.Link
+        landed_session = ev.session
+        landed_text = ev.title
+        landed_sender = ev.sender
+        publish()
+    }
+}
+
+func on_landed(ev: backend.Event) {
+    toast = mailbox.Kind.None
+    landed_session = ev.session
+    landed_name = summary(ev.count, ev.mime, ev.title)
+    landed_kind = ev.count == 1 ? mailbox.Kind.File : mailbox.Kind.Batch
+    landed_count = ev.count
+    landed_mime = ev.mime
+    landed_text = ev.title
+    landed_sender = ev.sender
+    landed_size = backend.landed_size(ev.session)
+    pending = true
+    pending_name = landed_name
+    unseen += 1
+    let paths = backend.landed_paths(ev.session)
+    landed_image = ""
+    if (len(paths) > 0 && backend.is_image(paths[0])) landed_image = paths[0]
+    if (popup) publish()
+    else shell.show(mailbox.Preview{})
+}
+
+func on_action(action: mailbox.Action) {
+    if ((action.kind == mailbox.Action_Kind.Accept || action.kind == mailbox.Action_Kind.Decline || action.kind == mailbox.Action_Kind.Cancel) && action.session != toast_session) return
+    if (action.kind == mailbox.Action_Kind.Accept) accept()
+    else if (action.kind == mailbox.Action_Kind.Decline) decline()
+    else if (action.kind == mailbox.Action_Kind.Cancel) cancel()
+    else if (action.kind == mailbox.Action_Kind.Reveal) reveal_saved()
+    else if (action.kind == mailbox.Action_Kind.Dismiss) dismiss_toast()
+    else on_landed_action(action)
+}
+
+func on_landed_action(action: mailbox.Action) {
+    if (action.session != landed_session || landed_kind == mailbox.Kind.None) return
+    let link = landed_kind == mailbox.Kind.Link
+    if (action.kind == mailbox.Action_Kind.Save) {
+        if (!link) save(action.folder)
+    } else if (action.kind == mailbox.Action_Kind.Close) {
+        if (!link) backend.discard(landed_session)
+        pending = false
+        landed_kind = mailbox.Kind.None
+        publish()
+    } else if (action.kind == mailbox.Action_Kind.Open) {
+        if (link) {
+            if (backend.is_url(landed_text)) backend.open(landed_text)
+            else backend.copy_text(landed_text)
+        } else {
+            let paths = backend.landed_paths(landed_session)
+            if (len(paths) > 0) {
+                if (action.folder == "reveal" || landed_count > 1) backend.reveal(paths[0])
+                else backend.open(paths[0])
+            }
+        }
+    } else if (action.kind == mailbox.Action_Kind.Copy) {
+        backend.copy_text(landed_text)
+    } else if (action.kind == mailbox.Action_Kind.Remember) {
+        backend.remember_folder(action.folder)
+        folders = backend.folders()
+    }
+}
+
+// ---------------------------------------------------------------- actions
+
+func accept() {
+    if (toast != mailbox.Kind.Request) return
+    backend.accept(toast_session)
+    toast = mailbox.Kind.Receiving
+    toast_title = toast_meta
+    toast_meta = "Waiting…"
+    progress = 0
+    publish()
+}
+
+func decline() {
+    if (toast != mailbox.Kind.Request) return
+    backend.decline(toast_session)
+    dismiss_toast()
+}
+
+func cancel() {
+    if (toast != mailbox.Kind.Receiving) return
+    backend.cancel(toast_session)
+    dismiss_toast()
+}
+
+func dismiss_toast() {
+    toast = mailbox.Kind.None
+    toast_until = 0
+    publish()
+}
+
+func reveal_saved() {
+    if (toast_reveal != "") backend.reveal(toast_reveal)
+    dismiss_toast()
+}
+
+func save(target: string) {
+    let folder = target != "" ? target : backend.downloads()
+    let result = backend.save_landed(landed_session, folder, landed_name)
+    history = backend.history()
+    if (result.saved > 0) unseen += 1
+    if (result.failed > 0) {
+        landed_count = backend.landed_count(landed_session)
+        landed_size = backend.landed_size(landed_session)
+        landed_kind = mailbox.Kind.None
+        show_notice("Could not save every file", fmt.tprintf("%d of %d failed", result.failed, result.saved + result.failed))
+    } else {
+        pending = false
+        landed_kind = mailbox.Kind.None
+        toast = mailbox.Kind.Saved
+        toast_session = 0
+        toast_title = fmt.tprintf("Saved to %s", backend.folder_name(folder))
+        toast_meta = landed_name
+        toast_until = now + SAVED_TOAST_SECONDS
+        publish()
+    }
+    toast_reveal = result.first != "" ? result.first : folder
+}
+
+export func review_pending() {
+    if (!pending) return
+    toast = mailbox.Kind.None
+    landed_kind = landed_count == 1 ? mailbox.Kind.File : mailbox.Kind.Batch
+    let paths = backend.landed_paths(landed_session)
+    landed_image = ""
+    if (len(paths) > 0 && backend.is_image(paths[0])) landed_image = paths[0]
+    publish()
+}
+
+
+export func open_item(item: backend.Item) {
+    if (item.kind == backend.Item_Kind.Link) backend.open(item.path)
+    else if (item.kind == backend.Item_Kind.Text) backend.copy_text(item.path)
+    else if (item.kind == backend.Item_Kind.Files) backend.reveal(item.path != "" ? item.path : item.folder)
+    else backend.open(item.path)
+}
+
+export func go(to: string) {
+    page = to
+    if (to == "received") unseen = 0
+}
+
+export func choose_mode(next: backend.Mode) {
+    let until: i64 = 0
+    if (next == backend.Mode.Ten_Minutes) until = backend.now() + 600
+    if (next == backend.Mode.One_Hour) until = backend.now() + 3600
+    backend.set_mode(next, until)
+    mode = next
+    visible_until = until
+}
+
+export func rename(name: string) {
+    backend.set_alias(name)
+    alias = backend.settings().alias
+}
+
+export func toggle_startup() {
+    backend.set_startup(!startup)
+    startup = backend.startup()
+}
+
+export func toggle_popup() {
+    popup = !popup
+    backend.set_popup(popup)
+}
+
+export func toggle_sound() {
+    sound = !sound
+    backend.set_sound(sound)
+}

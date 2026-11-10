@@ -1,0 +1,42 @@
+package main
+
+import "./style/index.css"
+odin:import time from "core:time"
+import platform from "banana:platform"
+import events from "banana:events"
+import { TitleBar } from "./components/title-bar.banana"
+import { Home } from "./components/home.banana"
+import { Received } from "./components/received.banana"
+import { Settings } from "./components/settings.banana"
+import { page, start, tick, tick_clock } from "./store/store.banana"
+
+export func component App() {
+    let title_bar: TitleBar = $state(nil)
+    let maximized = $state(false)
+
+    let w = $window()
+    w.on(events.WINDOW_RESIZE_EVENT, () => {
+        maximized = platform.is_maximized(w)
+    })
+
+    start()
+    w.setInterval(() => { tick() }, 50 * time.Millisecond)
+    w.setInterval(() => { tick_clock() }, 250 * time.Millisecond)
+
+    render {
+        @(
+            <box class="window {maximized ? 'maximized' : ''}">
+                <TitleBar key="title-bar" title="Catch" bind:this={title_bar}></TitleBar>
+                {
+                    if (page == "received") {
+                        @(<Received />)
+                    } else if (page == "settings") {
+                        @(<Settings />)
+                    } else {
+                        @(<Home />)
+                    }
+                }
+            </box>
+        )
+    }
+}

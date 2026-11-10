@@ -1,0 +1,4 @@
+.banana/
+build/
+native/build/
+.tools/

@@ -1,0 +1,131 @@
+package app.components
+
+import "../style/index.css"
+odin:import backend from "catch:backend"
+odin:import icon from "catch:kit/icon"
+odin:import fmt from "core:fmt"
+import { alias, mode, failure, now, visible_until, unseen, greeting_name, is_on, visibility_cta, visibility_meta, choose_mode, rename, go, pending, review_pending } from "../store/store.banana"
+
+let menu_open = $writable(false)
+
+func component ModeOption(label: string, value: backend.Mode, last: bool) {
+    render {
+        @(
+            <button class="menu-item" onclick={() => { choose_mode(value); menu_open = false }}>
+                <box class="disc {mode == value ? 'on' : ''}">
+                    {
+                        if (mode == value) {
+                            @(<icon name="check" size={14} />)
+                        }
+                    }
+                </box>
+                <box class="menu-label {last ? 'last' : ''}">{label}</box>
+            </button>
+        )
+    }
+}
+
+export func component Home() {
+    let editing = $state(false)
+    let on: bool = $derived(() => is_on(), [mode, failure])
+    let cta: string = $derived(() => visibility_cta(), [mode, failure])
+    let meta: string = $derived(() => visibility_meta(), [mode, failure, now, visible_until])
+    let draft = $state("")
+
+    let start_rename = () => {
+        draft = alias
+        editing = true
+    }
+    let finish_rename = () => {
+        rename(draft)
+        editing = false
+    }
+
+    render {
+        @(
+            <box class="home">
+                <box class="hero">
+                    <box class="column">
+                        <box class="caps hero-label">Visible as</box>
+                        {
+                            if (editing) {
+                                @(<input class="hero-input" bind:value={draft} onenter={finish_rename} onchange={finish_rename} />)
+                            } else {
+                                @(<box class="hero-name clip">{alias}</box>)
+                            }
+                        }
+                    </box>
+                    <box class="ring-outer {on ? '' : 'off'}">
+                        <box class="ripple"></box>
+                        <box class="ripple late"></box>
+                        <box class="ring-inner">
+                            <box class="ring-core">
+                                <icon name="radar" size={28} />
+                            </box>
+                        </box>
+                    </box>
+                    <box class="hero-status">
+                        <box class="pill">{on ? "ON" : "OFF"}</box>
+                        <box class="hero-meta">{meta}</box>
+                    </box>
+                    <button class="float-button" onclick={() => { if (editing) finish_rename() else start_rename() }}>
+                        <icon name={editing ? "check-2" : "pencil"} size={20} />
+                    </button>
+                </box>
+
+                <box class="side">
+                    <box class="between">
+                        <button class="round-button" onclick={() => { go("settings") }}>
+                            <icon name="sliders" size={20} />
+                        </button>
+                        <box class="badge-host">
+                            <button class="round-button" onclick={() => { go("received") }}>
+                                <icon name="inbox" size={20} />
+                            </button>
+                            {
+                                if (unseen > 0) {
+                                    @(<box class="badge">{unseen > 99 ? "99+" : fmt.tprintf("%d", unseen)}</box>)
+                                }
+                            }
+                        </box>
+                    </box>
+
+                    <box class="column" style="gap: 4px">
+                        <box class="greeting">{greeting_name != "" ? fmt.tprintf("Hello, %s", greeting_name) : "Hello"}</box>
+                        <box class="headline">
+                            <box>Drop anything from</box>
+                            <box class="strong">your Localsend</box>
+                        </box>
+                    </box>
+
+                    {
+                        if (menu_open) {
+                            @(
+                                <box class="menu">
+                                    <box class="caps">Stay visible for</box>
+                                    <ModeOption label="10 minutes" value={backend.Mode.Ten_Minutes} last={false} />
+                                    <ModeOption label="1 hour" value={backend.Mode.One_Hour} last={false} />
+                                    <ModeOption label="Always" value={backend.Mode.Always} last={false} />
+                                    <ModeOption label="Off" value={backend.Mode.Off} last={true} />
+                                </box>
+                            )
+                        }
+                    }
+
+                    <box class="cta-row">
+                        <box class="column" style="min-width: 0; flex-shrink: 1">
+                            <box class="title-3">{cta}</box>
+                            <box class="muted clip">{meta}</box>
+                        </box>
+                        <button class="power {on ? '' : 'off'}" onclick={() => { menu_open = !menu_open }}>
+                            <icon name="power" size={24} />
+                        </button>
+                    </box>
+                    { if (pending) { @(
+                        <button class="primary" onclick={() => { review_pending() }}>Review unsaved files</button>
+                    ) } }
+                </box>
+            </box>
+        )
+    }
+}

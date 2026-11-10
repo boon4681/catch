@@ -1,0 +1,20 @@
+{
+	// Read by the Odin LSP extension. Paths are relative to this file.
+	"collections": [
+		{ "name": "src", "path": "${BANANA_HOME}/src/" },
+		{ "name": "generated", "path": "./.banana/generated/" },
+		{ "name": "catch", "path": "./src/" }
+	],
+	"checker": {
+		// false: report what a plain `odin build` reports. true: also run the style checks.
+		"strict": false,
+		// Single checks, each overriding "strict": semicolon, style, cast, shadowing,
+		// unusedVariables, unusedImports, usingStmt, usingParam, tabs, disallowDo.
+		"style": {
+		},
+		// Extra arguments for `odin check`.
+		"arguments": [],
+		// Hide compiler diagnostics whose message contains one of these texts.
+		"ignore": []
+	}
+}

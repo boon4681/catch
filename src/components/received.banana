@@ -1,0 +1,139 @@
+package app.components
+
+import "../style/index.css"
+odin:import backend from "catch:backend"
+odin:import icon from "catch:kit/icon"
+odin:import fmt from "core:fmt"
+import { history, now, time_ago, open_item, go, pending, pending_name, review_pending } from "../store/store.banana"
+
+func icon_for(item: backend.Item): string {
+    if (item.kind == backend.Item_Kind.Link) return "globe"
+    if (item.kind == backend.Item_Kind.Text) return "text"
+    if (item.kind == backend.Item_Kind.Files) return "folder"
+    return "file"
+}
+
+func component Thumb(item: backend.Item) {
+    let picture: img = $state(nil)
+    $effect(() => {
+        if (picture != nil) picture.set_src(picture, item.path)
+    }, [picture])
+    render {
+        @(
+            <box class="thumb">
+                {
+                    if (item.kind == backend.Item_Kind.File && backend.is_image(item.path) && backend.file_exists(item.path)) {
+                        @(<img bind:this={picture} class="thumb-image" fit="Cover" />)
+                    } else {
+                        @(<icon name={icon_for(item)} size={20} />)
+                    }
+                }
+            </box>
+        )
+    }
+}
+
+func component ReceivedRow(item: backend.Item, last: bool) {
+    render {
+        @(
+            <box class="list-row">
+                <Thumb item={item} />
+                <box class="list-body {last ? 'last' : ''}">
+                    <box class="list-text">
+                        <box class="title-3 clip">{item.name}</box>
+                        <box class="muted clip">{fmt.tprintf("%s · %s", item.sender, time_ago(item.at))}</box>
+                    </box>
+                    <button class="round-button" onclick={() => { open_item(item) }}>
+                        <icon name={item.kind == backend.Item_Kind.Text ? "copy" : "arrow-ur"} size={20} />
+                    </button>
+                </box>
+            </box>
+        )
+    }
+}
+
+export func component Received() {
+    let today = $derived(() => backend.local_day(now), [now])
+    let today_count: int = $derived(() => {
+        let n = 0
+        for (let item in history) {
+            if (backend.local_day(item.at) == today) n += 1
+        }
+        return n
+    }, [history, today])
+
+    render {
+        @(
+            <box class="page">
+                <box class="between">
+                    <button class="round-button" onclick={() => { go("home") }}>
+                        <icon name="arrow-l" size={20} />
+                    </button>
+                </box>
+
+                <box class="page-title">{fmt.tprintf("Received (%d)", len(history))}</box>
+
+                <scroll_area class="page-scroll">
+                    <box class="column" style="width: 100%">
+                        { if (pending) { @(
+                            <box class="list-row">
+                                <box class="list-body">
+                                    <box class="list-text">
+                                        <box class="title-3 clip">{pending_name}</box>
+                                        <box class="muted">Waiting for Save</box>
+                                    </box>
+                                    <button class="primary" onclick={() => { review_pending() }}>Review</button>
+                                </box>
+                            </box>
+                        ) } }
+                        {
+                            if (len(history) == 0) {
+                                @(<box class="empty">Nothing yet. Open LocalSend on your iPhone and pick this PC.</box>)
+                            }
+                        }
+                        {
+                            if (today_count > 0) {
+                                @(
+                                    <box class="section">
+                                        <box class="caps">Today</box>
+                                        <box class="column">
+                                            {
+                                                let i = 0
+                                                for (let item in history) {
+                                                    if (backend.local_day(item.at) == today) {
+                                                        i += 1
+                                                        @(item.id, <ReceivedRow item={item} last={i == today_count} />)
+                                                    }
+                                                }
+                                            }
+                                        </box>
+                                    </box>
+                                )
+                            }
+                        }
+                        {
+                            if (len(history) > today_count) {
+                                @(
+                                    <box class="section">
+                                        <box class="caps">Earlier</box>
+                                        <box class="column">
+                                            {
+                                                let j = 0
+                                                for (let item in history) {
+                                                    if (backend.local_day(item.at) != today) {
+                                                        j += 1
+                                                        @(item.id, <ReceivedRow item={item} last={j == len(history) - today_count} />)
+                                                    }
+                                                }
+                                            }
+                                        </box>
+                                    </box>
+                                )
+                            }
+                        }
+                    </box>
+                </scroll_area>
+            </box>
+        )
+    }
+}

@@ -1,0 +1,55 @@
+package app.components
+
+import "../style/index.css"
+odin:import icon from "catch:kit/icon"
+import { startup, popup, sound, toggle_startup, toggle_popup, toggle_sound, go } from "../store/store.banana"
+
+func component SwitchRow(label: string, meta: string, on: bool, last: bool, which: string) {
+    let flip = () => {
+        if (which == "startup") toggle_startup()
+        else if (which == "popup") toggle_popup()
+        else toggle_sound()
+    }
+    render {
+        @(
+            <button class="switch-row" onclick={() => { flip() }}>
+                <box class="disc {on ? 'on' : ''}">
+                    {
+                        if (on) {
+                            @(<icon name="check" size={14} />)
+                        }
+                    }
+                </box>
+                <box class="switch-text {last ? 'last' : ''}">
+                    <box class="switch-label">{label}</box>
+                    <box class="muted">{meta}</box>
+                </box>
+            </button>
+        )
+    }
+}
+
+export func component Settings() {
+    render {
+        @(
+            <box class="page">
+                <box class="between">
+                    <button class="round-button" onclick={() => { go("home") }}>
+                        <icon name="arrow-l" size={20} />
+                    </button>
+                </box>
+
+                <box class="page-title">Settings</box>
+
+                <box class="section">
+                    <box class="caps">General</box>
+                    <box class="column">
+                        <SwitchRow label="Start with Windows" meta="Catch opens minimized when you sign in" on={startup} last={false} which="startup" />
+                        <SwitchRow label="Show preview popup" meta="After a file or link lands" on={popup} last={false} which="popup" />
+                        <SwitchRow label="Play sound" meta="When something arrives" on={sound} last={true} which="sound" />
+                    </box>
+                </box>
+            </box>
+        )
+    }
+}

@@ -1,5 +1,5 @@
 
-<img align="left" width="60px" src="./icon.svg" />
+<img align="left" width="80px" src="./icon.svg" />
 
 # Catch
 

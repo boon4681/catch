@@ -1,3 +1,6 @@
+
+<img align="left" width="60px" src="./icon.svg" />
+
 # Catch
 
 Desktop app for receive file from any [localsend](https://localsend.org/). low profile and low memory usage. built with banana.

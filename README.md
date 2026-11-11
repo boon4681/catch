@@ -3,9 +3,7 @@
 
 <h1>Catch<br/><br/></h1>
 
-<br/>
-
-Desktop app for receive file from any [localsend](https://localsend.org/). low profile and low memory usage. built with banana.
+Desktop app for receive file from any [localsend](https://localsend.org/). low profile and low memory usage. built with [banana](https://github.com/boon4681/banana).
 
 Memory usage is Hopping around 10 to 30MB while running.
 
